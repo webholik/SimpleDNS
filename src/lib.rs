@@ -1,3 +1,4 @@
+use rand::random;
 use std::io::{Error, ErrorKind};
 use std::net::{Ipv4Addr, Ipv6Addr};
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -36,21 +37,21 @@ impl BytePacketBuffer {
         }
     }
 
-    fn pos(&self) -> usize {
+    pub fn pos(&self) -> usize {
         self.pos
     }
 
-    fn step(&mut self, steps: usize) -> Result<(), Error> {
+    pub fn step(&mut self, steps: usize) -> Result<(), Error> {
         self.pos += steps;
         Ok(())
     }
 
-    fn seek(&mut self, pos: usize) -> Result<(), Error> {
+    pub fn seek(&mut self, pos: usize) -> Result<(), Error> {
         self.pos = pos;
         Ok(())
     }
 
-    fn read(&mut self) -> Result<u8, Error> {
+    pub fn read(&mut self) -> Result<u8, Error> {
         if self.pos >= 512 {
             return Err(Error::new(ErrorKind::InvalidInput, "End of buffer"));
         }
@@ -61,7 +62,7 @@ impl BytePacketBuffer {
         Ok(res)
     }
 
-    fn get(&self, pos: usize) -> Result<u8, Error> {
+    pub fn get(&self, pos: usize) -> Result<u8, Error> {
         if pos >= 512 {
             return Err(Error::new(ErrorKind::InvalidInput, "End of buffer"));
         }
@@ -69,7 +70,7 @@ impl BytePacketBuffer {
         Ok(self.buf[pos])
     }
 
-    fn get_range(&self, start: usize, len: usize) -> Result<&[u8], Error> {
+    pub fn get_range(&self, start: usize, len: usize) -> Result<&[u8], Error> {
         if start + len >= 512 {
             return Err(Error::new(ErrorKind::InvalidInput, "End of buffer"));
         }
@@ -77,17 +78,17 @@ impl BytePacketBuffer {
         Ok(&self.buf[start..start + len])
     }
 
-    fn read_u16(&mut self) -> Result<u16, Error> {
+    pub fn read_u16(&mut self) -> Result<u16, Error> {
         let res = ((self.read()? as u16) << 8) | (self.read()? as u16);
         Ok(res)
     }
 
-    fn read_u32(&mut self) -> Result<u32, Error> {
+    pub fn read_u32(&mut self) -> Result<u32, Error> {
         let res = ((self.read_u16()? as u32) << 16) | (self.read_u16()? as u32);
         Ok(res)
     }
 
-    fn read_qname(&mut self, out_str: &mut String) -> Result<(), Error> {
+    pub fn read_qname(&mut self, out_str: &mut String) -> Result<(), Error> {
         let mut pos = self.pos();
         let mut jumped = false;
         let mut delim = "";
@@ -564,6 +565,7 @@ impl DnsRecord {
     }
 }
 
+#[derive(Clone)]
 pub struct DnsPacket {
     pub header: DnsHeader,
     pub questions: Vec<DnsQuestion>,
@@ -637,5 +639,86 @@ impl DnsPacket {
         }
 
         Ok(())
+    }
+
+    pub fn get_random_a(&self) -> Option<String> {
+        if !self.answers.is_empty() {
+            let idx = random::<usize>() % self.answers.len();
+            let a_record = &self.answers[idx];
+            if let DnsRecord::A { ref addr, .. } = *a_record {
+                return Some(addr.to_string());
+            }
+        }
+        None
+    }
+
+    pub fn get_resolved_ns(&self, qname: &str) -> Option<String> {
+        let mut new_authorities = Vec::new();
+        for auth in &self.authorities {
+            if let DnsRecord::NS {
+                ref domain,
+                ref host,
+                ..
+            } = *auth
+            {
+                if !qname.ends_with(domain) {
+                    continue;
+                }
+
+                for rsrc in &self.resources {
+                    if let DnsRecord::A {
+                        ref domain,
+                        ref addr,
+                        ttl,
+                    } = *rsrc
+                    {
+                        if domain != host {
+                            continue;
+                        }
+
+                        let rec = DnsRecord::A {
+                            domain: host.clone(),
+                            addr: *addr,
+                            ttl: ttl,
+                        };
+
+                        new_authorities.push(rec);
+                    }
+                }
+            }
+        }
+
+        if !new_authorities.is_empty() {
+            if let DnsRecord::A { addr, .. } = new_authorities[0] {
+                return Some(addr.to_string());
+            }
+        }
+
+        None
+    }
+
+    pub fn get_unresolved_ns(&self, qname: &str) -> Option<String> {
+        let mut new_authorities = Vec::new();
+        for auth in &self.authorities {
+            if let DnsRecord::NS {
+                ref domain,
+                ref host,
+                ..
+            } = *auth
+            {
+                if !qname.ends_with(domain) {
+                    continue;
+                }
+
+                new_authorities.push(host)
+            }
+        }
+
+        if !new_authorities.is_empty() {
+            let idx = random::<usize>() % new_authorities.len();
+            return Some(new_authorities[idx].clone());
+        }
+
+        None
     }
 }
